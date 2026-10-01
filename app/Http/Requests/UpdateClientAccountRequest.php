@@ -19,6 +19,7 @@ class UpdateClientAccountRequest extends FormRequest
             'adresse' => ['nullable', 'string', 'max:255'],
             'region' => ['nullable', 'string', 'max:50'],
             'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+            'remove_avatar' => ['nullable', 'boolean'],
             'current_password' => ['nullable', 'string'],
             'new_password' => ['nullable', 'string', 'min:8', 'confirmed'],
         ];

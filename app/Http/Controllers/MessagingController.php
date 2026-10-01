@@ -84,7 +84,14 @@ class MessagingController extends Controller
 
         // Formate les messages avec expéditeur ('me'/'other') et heure.
         $messages = collect($this->messaging->messagesFor($conversation))->map(
-            fn ($m) => ['sender' => (int) $m->sender_id === (int) $user->id ? 'me' : 'other', 'text' => $m->body, 'time' => $m->created_at->format('H:i')]
+            fn ($m) => [
+                'id'        => $m->id,
+                'sender'    => (int) $m->sender_id === (int) $user->id ? 'me' : 'other',
+                'text'      => $m->body,
+                'time'      => $m->created_at->format('H:i'),
+                'edited_at' => $m->edited_at?->format('H:i'),
+                'is_edited' => $m->isEdited(),
+            ]
         )->all();
 
         return view('discussion', [
@@ -94,9 +101,9 @@ class MessagingController extends Controller
                 'avatar' => $otherUser->avatar_url
                     ?? 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=500&q=80',
             ],
-            'messages' => $messages,
+            'messages'   => $messages,
             'producerId' => $otherUser->id,
-            'user' => $user,
+            'user'       => $user,
         ]);
     }
 
@@ -123,5 +130,40 @@ class MessagingController extends Controller
         $this->notifications->send($recipient, 'message', 'Nouveau message', "Vous avez reçu un nouveau message de {$user->name}.");
 
         return redirect()->route('discussion', ['id' => $otherUser->id]);
+    }
+
+    /**
+     * Modifie un message existant appartenant à l'utilisateur connecté.
+     *
+     * Sécurité (triple vérification) :
+     *  1. Le message est chargé depuis la BDD via son ID (pas de confiance client).
+     *  2. Gate::authorize('update', $message) vérifie sender_id === user.id via MessagePolicy.
+     *  3. Le message doit appartenir à une conversation dont l'utilisateur est participant.
+     */
+    public function update(Request $request, \App\Models\Message $message): RedirectResponse
+    {
+        $user = Auth::user();
+
+        // 1. Vérification que l'utilisateur est l'auteur du message (IDOR-safe).
+        \Illuminate\Support\Facades\Gate::authorize('update', $message);
+
+        // 2. Vérification que l'utilisateur est participant à la conversation du message.
+        $this->messaging->assertParticipant($user, $message->conversation);
+
+        // 3. Validation du nouveau contenu.
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $this->messaging->editMessage($message, $validated['message']);
+
+        // Retrouve l'interlocuteur pour la redirection.
+        $conversation = $message->conversation;
+        $otherId = (int) $conversation->client_id === (int) $user->id
+            ? $conversation->producer_id
+            : $conversation->client_id;
+
+        return redirect()->route('discussion', ['id' => $otherId])
+            ->with('success', 'Message modifié.');
     }
 }

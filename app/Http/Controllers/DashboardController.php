@@ -340,9 +340,7 @@ class DashboardController extends Controller
         $user->phone = $validated['phone'] ?? $user->phone;
         $description = $validated['description'] ?? $validated['bio'] ?? $user->bio;
         $user->bio = $description;
-        if ($request->hasFile('avatar')) {
-            $user->avatar = $request->file('avatar')->store('profile_photos', 'public');
-        }
+        $this->replaceAvatar($user, $request);
         $user->save();
 
         $user->producerProfile()->updateOrCreate([], [
@@ -440,6 +438,12 @@ class DashboardController extends Controller
         // 3. Mission 15 — persistent MySQL notifications.
         $notifications = app(NotificationService::class)->forUser($user);
 
+        // Post-achat : invitations à la notation encore en attente pour ce
+        // client (onglet « Vos achats à évaluer »). Calculé depuis MySQL.
+        $postPurchaseReviews = app(\App\Services\PostPurchaseReviewService::class);
+        $pendingReviews = $postPurchaseReviews->pendingForClient($user);
+        $pendingReviewsCount = $postPurchaseReviews->pendingCountFor($user);
+
         $activeTab = $request->query('tab', 'orders');
 
         // Persistent MySQL cart: counters and totals are read from the database.
@@ -465,6 +469,8 @@ class DashboardController extends Controller
             'ordersCount' => $ordersCount,
             'recommendations' => $recommendations,
             'activeTab' => $activeTab,
+            'pendingReviews' => $pendingReviews,
+            'pendingReviewsCount' => $pendingReviewsCount,
         ]);
     }
 
@@ -493,9 +499,7 @@ class DashboardController extends Controller
         $user->phone = $validated['phone'];
         $user->adresse = $validated['adresse'] ?? $user->adresse;
         $user->region = $validated['region'] ?? $user->region;
-        if ($request->hasFile('avatar')) {
-            $user->avatar = $request->file('avatar')->store('profile_photos', 'public');
-        }
+        $this->replaceAvatar($user, $request);
 
         // Handle password change if provided
         if (!empty($validated['new_password'])) {
@@ -508,6 +512,34 @@ class DashboardController extends Controller
         $user->save();
 
         return redirect()->route('client.dashboard', ['tab' => 'account'])->with('success', 'Profil mis à jour avec succès.');
+    }
+
+    /**
+     * Gestion unifiée de la photo de profil : ajout, remplacement, suppression.
+     *
+     * La photo de profil vit uniquement dans storage/app/public/profile_photos.
+     * Elle est totalement distincte des documents de vérification producteur
+     * (CNI, carte producteur…), stockés sur un disque privé et jamais exposés.
+     */
+    private function replaceAvatar(User $user, Request $request): void
+    {
+        $disk = Storage::disk('public');
+        $previous = $user->avatarPath();
+
+        if ($request->boolean('remove_avatar') && ! $request->hasFile('avatar')) {
+            $user->avatar = null;
+        } elseif ($request->hasFile('avatar')) {
+            $file = $request->file('avatar');
+            $name = 'profile_' . Str::random(24) . '.' . strtolower($file->getClientOriginalExtension());
+
+            $new = $file->storeAs(User::AVATAR_DIRECTORY, $name, 'public');
+            $user->avatar = $new;
+            $previous = $previous !== $new ? $previous : null;
+        }
+
+        if ($previous !== null && $previous !== $user->avatarPath()) {
+            $disk->delete($previous);
+        }
     }
 
     /**

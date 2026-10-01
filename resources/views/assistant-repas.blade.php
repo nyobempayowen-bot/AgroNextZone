@@ -50,7 +50,8 @@
     <template id="tpl-products">
         <div class="flex justify-start">
             <div class="bg-emerald-50 ring-1 ring-emerald-200 rounded-2xl rounded-bl-sm px-4 py-3 max-w-[85%] w-full">
-                <p class="text-[11px] font-bold uppercase tracking-wide text-emerald-700 mb-2">Produits disponibles (mieux notés en premier)</p>
+                <p class="text-[11px] font-bold uppercase tracking-wide text-emerald-700 mb-1">Vérifié en direct dans AgroNextZone</p>
+                                <p class="text-[11px] text-emerald-700/80 mb-2">Prix, stock et producteur réels, Base de données à l'instant de la question.</p>
                 <div class="tpl-list space-y-2"></div>
             </div>
         </div>
@@ -83,7 +84,7 @@
                 if (!products || products.length === 0) {
                     const wrap = document.createElement('div');
                     wrap.className = 'flex justify-start';
-                    wrap.innerHTML = '<div class="bg-amber-50 ring-1 ring-amber-200 rounded-2xl rounded-bl-sm px-4 py-3 text-sm text-amber-800">Aucun produit correspondant n\'est disponible en ce moment (rupture de stock ou aucun producteur). Revenez plus tard ou précisez d\'autres ingrédients.</div>';
+                    wrap.innerHTML = '<div class="bg-amber-50 ring-1 ring-amber-200 rounded-2xl rounded-bl-sm px-4 py-3 text-sm text-amber-800">J\'ai recherché dans le catalogue AgroNextZone : aucun produit ne correspond actuellement à votre demande. Essayez un autre terme ou une autre appellation locale.</div>';
                     box.appendChild(wrap);
                     scroll();
                     return;
@@ -92,11 +93,38 @@
                 const tpl = document.getElementById('tpl-products').content.cloneNode(true);
                 const list = tpl.querySelector('.tpl-list');
                 products.forEach(p => {
-                    const a = document.createElement('a');
-                    a.href = '/produit/' + (p.slug || '');
-                    a.className = 'block rounded-lg bg-white px-3 py-2 ring-1 ring-black/5 hover:ring-emerald-300';
-                    a.textContent = p.name + ' — ' + p.price + ' F/' + p.unit + ' · ' + p.producer + ' · fiabilité ' + p.score + '/100';
-                    list.appendChild(a);
+                    // Une carte par produit réel, avec ses données commerciales.
+                    const card = document.createElement('div');
+                    card.className = 'rounded-lg bg-white px-3 py-2 ring-1 ring-black/5';
+
+                    const title = document.createElement('a');
+                    title.href = p.url || ('/produit/' + (p.slug || ''));
+                    title.className = 'block text-sm font-bold text-slate-800 hover:text-emerald-700';
+                    title.textContent = p.name;
+                    card.appendChild(title);
+
+                    const meta = document.createElement('p');
+                    meta.className = 'mt-0.5 text-[11px] text-slate-600';
+                    meta.textContent = [
+                        p.producer ? '👨‍🌾 ' + p.producer : null,
+                        p.location ? '📍 ' + p.location : null,
+                    ].filter(Boolean).join(' · ');
+                    if (meta.textContent) card.appendChild(meta);
+
+                    const stock = document.createElement('p');
+                    stock.className = 'mt-0.5 text-[11px] font-semibold ' +
+                        (p.purchasable ? 'text-emerald-700' : 'text-amber-700');
+                    stock.textContent = '💰 ' + p.price + ' F / ' + p.unit
+                        + '  ·  📦 ' + (p.disponibilite || 'statut inconnu');
+                    card.appendChild(stock);
+
+                    const link = document.createElement('a');
+                    link.href = p.url || ('/produit/' + (p.slug || ''));
+                    link.className = 'mt-1.5 inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-700';
+                    link.textContent = 'Voir le produit';
+                    card.appendChild(link);
+
+                    list.appendChild(card);
                 });
                 box.appendChild(tpl);
                 scroll();

@@ -12,6 +12,16 @@ class AuthPhoneAndCartTest extends TestCase
     // afin que chaque test parte d'un état propre et indépendant.
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        // Since products are now in MySQL, we need to seed the required products
+        // for these tests (cacao-fermente-qualite-superieure).
+        // ProductSeeder requires a producer to exist.
+        User::factory()->create(['role' => 'producer', 'id' => 999]);
+        $this->seed(\Database\Seeders\ProductSeeder::class);
+    }
+
     /**
      * Test 1 — Validation du champ téléphone à l'inscription.
      * Un numéro contenant des lettres doit être rejeté.
@@ -93,10 +103,9 @@ class AuthPhoneAndCartTest extends TestCase
             ->from('/')
             ->post('/panier/ajouter/cacao-fermente-qualite-superieure');
 
-        // Vérifie la redirection vers la page du panier
-        // ET que la session contient bien un panier non vide.
+        // ET que la base de données contient bien un panier pour cet utilisateur.
         $response->assertRedirect('/panier');
-        $this->assertNotEmpty(session('cart'));
+        $this->assertDatabaseHas('carts', ['user_id' => $client->id]);
     }
 
     /**
@@ -106,13 +115,13 @@ class AuthPhoneAndCartTest extends TestCase
     public function test_visitor_cannot_access_purchase_routes(): void
     {
         // Chaque route d'achat est testée sans utilisateur connecté :
-        // elles doivent toutes renvoyer 401 Unauthorized.
-        $this->get('/panier')->assertUnauthorized();
-        $this->post('/panier/ajouter/cacao-fermente-qualite-superieure')->assertUnauthorized();
-        $this->get('/checkout')->assertUnauthorized();
-        $this->post('/checkout')->assertUnauthorized();
-        $this->post('/produit/cacao-fermente-qualite-superieure/acheter')->assertUnauthorized();
-        $this->get('/mes-commandes')->assertUnauthorized();
+        // elles doivent toutes rediriger vers /login (anciennement 401).
+        $this->get('/panier')->assertRedirect('/login');
+        $this->post('/panier/ajouter/cacao-fermente-qualite-superieure')->assertRedirect('/login');
+        $this->get('/checkout')->assertRedirect('/login');
+        $this->post('/checkout')->assertRedirect('/login');
+        $this->post('/produit/cacao-fermente-qualite-superieure/acheter')->assertRedirect('/login');
+        $this->get('/mes-commandes')->assertRedirect('/login');
     }
 
     /**

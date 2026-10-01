@@ -25,6 +25,7 @@ class UpdateProducerAccountRequest extends FormRequest
             'years_experience' => ['nullable', 'integer', 'min:0', 'max:120'],
             'description' => ['nullable', 'string', 'max:1000'],
             'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+            'remove_avatar' => ['nullable', 'boolean'],
         ];
     }
 }

@@ -41,6 +41,9 @@
     @else
         <a href="{{ route('client.dashboard', ['tab' => 'orders']) }}" class="text-emerald-700 font-semibold underline">Retour à mes commandes</a>
     @endif
+
+    {{-- Invitation à noter (facultative, non bloquante, fermable). --}}
+    @include('components.post-purchase-invitation', ['invitation' => $invitation, 'order' => $order])
 </main>
 </body>
 </html>

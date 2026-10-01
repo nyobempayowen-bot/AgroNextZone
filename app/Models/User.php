@@ -35,21 +35,145 @@ class User extends Authenticatable
         ];
     }
 
+    /**
+     * Dossier unique contenant les photos de profil.
+     * Les documents de vérification producteur (CNI, etc.) sont stockés
+     * ailleurs (voir ProducerVerification) et ne doivent jamais passer ici.
+     */
+    public const AVATAR_DIRECTORY = 'profile_photos';
+
+    /**
+     * URL publique de la photo de profil, ou null si aucune photo valide.
+     *
+     * La valeur en base n'est jamais utilisée telle quelle comme URL : on
+     * vérifie qu'elle pointe bien dans le dossier des photos de profil, que le
+     * fichier existe réellement sur le disque `public`, et on n'autorise pas
+     * les URL externes ni les traversées de chemin.
+     */
     public function getAvatarUrlAttribute(): ?string
     {
-        if (empty($this->avatar)) {
+        $path = $this->avatarPath();
+
+        if ($path === null) {
             return null;
         }
 
-        if (Str::startsWith($this->avatar, ['http://', 'https://', '/'])) {
-            return $this->avatar;
+        $disk = Storage::disk('public');
+
+        if (! $disk->exists($path)) {
+            return null;
         }
 
-        if (Storage::disk('public')->exists($this->avatar)) {
-            return asset('storage/' . ltrim($this->avatar, '/'));
+        // URL versionnée (mtime) pour éviter tout cache navigateur obsolète
+        // après ajout / remplacement / suppression de la photo.
+        $version = (int) $disk->lastModified($path);
+
+        // L'URL doit suivre l'hôte/port/schéma réellement servis : une URL
+        // absolue figée sur APP_URL (ex. http://localhost) casse dès que
+        // l'application est servie ailleurs (port 8000/8123, 127.0.0.1,
+        // domaine réel) et l'image se transforme en 404 -> initiales.
+        // On renvoie donc un chemin relatif à la racine quand une requête
+        // HTTP est disponible, et l'URL absolue du disque sinon (console).
+        $url = $this->resolveAvatarPublicUrl($path, $disk);
+
+        return $url . ($version > 0 ? '?v=' . $version : '');
+    }
+
+    /**
+     * URL publique servie par le serveur web courant pour un fichier du disque.
+     *
+     * Renvoie un chemin relatif à la racine (`/storage/...`) si bien servi,
+     * ce qui rend l'image indépendante de l'hôte, du port et du schéma.
+     * Hors contexte HTTP (console, tests, jobs), on retombe sur l'URL absolue
+     * configurée pour le disque.
+     */
+    private function resolveAvatarPublicUrl(string $path, \Illuminate\Contracts\Filesystem\Filesystem $disk): string
+    {
+        $prefix = (string) config('filesystems.disks.public.url');
+
+        // On ne garde que la partie « chemin » de l'URL du disque
+        // (ex. http://localhost/storage -> /storage). Le nom d'hôte est
+        // volontairement écarté : c'est celui de la requête courante qui
+        // doit servir l'image, pas celui figé dans APP_URL.
+        if (preg_match('#^[a-z][a-z0-9+.\-]*://#i', $prefix)) {
+            $urlPath = parse_url($prefix, PHP_URL_PATH);
+            $prefix = is_string($urlPath) ? $urlPath : '';
         }
 
-        return null;
+        $prefix = trim((string) preg_replace('#/+$#', '', $prefix), '/');
+
+        $relative = ($prefix !== '' ? '/'.$prefix : '').'/'.$path;
+
+        if (! $this->hasHttpContext()) {
+            return $disk->url($path);
+        }
+
+        return $relative;
+    }
+
+    /**
+     * Vrai lorsqu'on est dans une vraie requête HTTP (et non en console/CLI).
+     */
+    private function hasHttpContext(): bool
+    {
+        if (app()->runningInConsole() && ! app()->runningUnitTests()) {
+            return false;
+        }
+
+        if (! app()->bound('request')) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Chemin de la photo de profil s'il est sûr et valide, sinon null.
+     */
+    public function avatarPath(): ?string
+    {
+        $value = $this->avatar;
+
+        if (! is_string($value) || $value === '') {
+            return null;
+        }
+
+        $value = str_replace('\\', '/', trim($value));
+
+        // Pas d'URL externe, pas de chemin absolu, pas de séquence de remontée.
+        if (Str::contains($value, ['://', '..']) || Str::startsWith($value, ['/', '\\'])) {
+            return null;
+        }
+
+        $prefix = self::AVATAR_DIRECTORY . '/';
+
+        if (! Str::startsWith($value, $prefix)) {
+            return null;
+        }
+
+        $name = Str::after($value, $prefix);
+
+        if ($name === '' || Str::contains($name, '/')) {
+            return null;
+        }
+
+        return $prefix . $name;
+    }
+
+    /**
+     * Initiales utilisées comme solution de secours (ex. "OM").
+     */
+    public function getInitialsAttribute(): string
+    {
+        $parts = preg_split('/\s+/u', trim((string) $this->name), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        $initials = '';
+
+        foreach (array_slice($parts, 0, 2) as $part) {
+            $initials .= mb_strtoupper(mb_substr($part, 0, 1));
+        }
+
+        return $initials !== '' ? $initials : mb_strtoupper(mb_substr((string) $this->name, 0, 1) ?: '?');
     }
 
     public function products(): HasMany

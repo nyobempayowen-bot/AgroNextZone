@@ -54,6 +54,9 @@
                 <a href="{{ route('client.dashboard', ['tab' => 'orders']) }}" class="whitespace-nowrap px-3.5 py-2 rounded-xl transition {{ $activeTab === 'orders' ? 'bg-emerald-700 text-white font-bold' : 'text-slate-600 hover:bg-slate-100' }}">
                     Mes commandes ({{ $ordersCount ?? 0 }})
                 </a>
+                <a href="{{ route('client.dashboard', ['tab' => 'reviews']) }}" class="whitespace-nowrap px-3.5 py-2 rounded-xl transition {{ $activeTab === 'reviews' ? 'bg-emerald-700 text-white font-bold' : 'text-slate-600 hover:bg-slate-100' }}">
+                    Achats à évaluer @if(($pendingReviewsCount ?? 0) > 0)<span class="ml-1 inline-flex items-center justify-center rounded-full bg-emerald-100 px-1.5 text-[10px] font-black text-emerald-800 {{ $activeTab === 'reviews' ? '!bg-white/25 !text-white' : '' }}">{{ $pendingReviewsCount }}</span>@endif
+                </a>
                 <a href="{{ route('client.dashboard', ['tab' => 'account']) }}" class="whitespace-nowrap px-3.5 py-2 rounded-xl transition {{ $activeTab === 'account' ? 'bg-emerald-700 text-white font-bold' : 'text-slate-600 hover:bg-slate-100' }}">
                     Mon profil
                 </a>
@@ -214,6 +217,82 @@
         </div>
         @endif
 
+        @if ($activeTab === 'reviews')
+        {{-- Achats à évaluer : invitation retrouvée plus tard (« Plus tard »).
+             Liste strictement dérivée de MySQL ; la notation reste facultative. --}}
+        <div class="space-y-4">
+            <div class="rounded-2xl border border-emerald-100 bg-emerald-50/60 p-4">
+                <p class="text-sm font-bold text-emerald-900">Vos achats à évaluer</p>
+                <p class="mt-1 text-xs text-emerald-800/80">
+                   Partagez votre expérience sur les produits et producteurs que vous avez achetés.
+                    C'est complètement facultatif : vos commandes restent valides sans avis.
+                </p>
+            </div>
+
+            @forelse ($pendingReviews as $purchase)
+                <div class="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                        <div>
+                            <span class="font-mono text-xs font-bold text-emerald-800">{{ $purchase['reference'] }}</span>
+                            <span class="ml-2 text-xs text-slate-400">{{ $purchase['date'] }}</span>
+                        </div>
+                        <span class="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-800">
+                            {{ $purchase['total'] }} élément(s) à noter
+                        </span>
+                    </div>
+
+                    @if ($purchase['products']->isNotEmpty())
+                        <ul class="mt-3 space-y-3">
+                            @foreach ($purchase['products'] as $item)
+                                <li class="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                    <div class="flex items-center gap-3">
+                                        @if (!empty($item['image']))
+                                            <img src="{{ $item['image'] }}" alt="{{ $item['nom'] }}" class="h-12 w-12 shrink-0 rounded-lg object-cover" loading="lazy" />
+                                        @endif
+                                        <div class="min-w-0 flex-1">
+                                            <p class="truncate text-sm font-bold text-slate-800">{{ $item['nom'] }}</p>
+                                            <p class="truncate text-[11px] text-slate-500">{{ $item['producteur'] ?? 'Producteur' }}</p>
+                                        </div>
+                                    </div>
+                                    {{-- Le vrai formulaire de note produit (contrôle d'achat refait côté serveur). --}}
+                                    <div class="mt-3">
+                                        @include('components.quick-product-rating-form', ['item' => $item])
+                                    </div>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+
+                    @if ($purchase['producers']->isNotEmpty())
+                        <ul class="mt-3 space-y-3">
+                            @foreach ($purchase['producers'] as $producer)
+                                <li class="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3">
+                                    <p class="text-xs font-bold text-slate-800">Producteur : {{ $producer['nom'] }}</p>
+                                    <div class="mt-2">
+                                        @include('components.producer-rating-form', [
+                                            'ord' => [
+                                                'order_id' => $producer['order_id'],
+                                                'producteur_id' => $producer['id'],
+                                                'producteur' => $producer['nom'],
+                                                'mon_avis' => null,
+                                            ],
+                                        ])
+                                    </div>
+                                </li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </div>
+            @empty
+                <div class="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
+                    <p class="text-sm font-semibold text-slate-700">Rien à évaluer pour le moment</p>
+                    <p class="mt-1 text-xs text-slate-500">Vos produits achetés non encore notés apparaîtront ici.</p>
+                    <a href="{{ route('home') }}" class="mt-4 inline-flex items-center justify-center rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-semibold text-white hover:bg-emerald-700 transition">Explorer le catalogue</a>
+                </div>
+            @endforelse
+        </div>
+        @endif
+
         @if ($activeTab === 'account')
         <div class="max-w-2xl mx-auto">
             @if (session('success'))
@@ -238,6 +317,9 @@
                         <input id="client-avatar-input" type="file" name="avatar" accept="image/jpeg,image/png,image/jpg,image/webp" class="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-xs sm:text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-emerald-50 file:px-3 file:py-1.5 file:text-xs file:font-bold file:text-emerald-700" />
                         <p class="mt-1 text-[11px] text-slate-500">JPG, PNG ou WEBP, 2 Mo maximum. L’aperçu se met à jour immédiatement.</p>
                         @error('avatar')<p class="mt-1 text-xs text-rose-600">{{ $message }}</p>@enderror
+                        @if ($user->avatar_url)
+                            <label class="mt-2 flex items-center gap-2 text-xs font-medium text-slate-600"><input type="checkbox" name="remove_avatar" value="1" class="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-600" /> Supprimer ma photo de profil</label>
+                        @endif
                     </div>
                     <div>
                         <label class="block text-xs sm:text-sm font-medium text-slate-700 mb-1">Nom complet *</label>

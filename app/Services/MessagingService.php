@@ -54,6 +54,20 @@ class MessagingService
         });
     }
 
+    /**
+     * Modifie le corps d'un message existant.
+     * La policy MessagePolicy::update() DOIT avoir été vérifiée avant d'appeler cette méthode.
+     */
+    public function editMessage(Message $message, string $newBody): Message
+    {
+        $message->update([
+            'body'      => trim($newBody),
+            'edited_at' => now(),
+        ]);
+
+        return $message->fresh();
+    }
+
     /** Chronological messages of a conversation the user is part of. */
     public function messagesFor(Conversation $conversation): array
     {

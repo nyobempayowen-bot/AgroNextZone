@@ -33,6 +33,12 @@ class ProducerReviewService
             return ['eligible' => false, 'reason' => 'Cette commande ne vous appartient pas.'];
         }
 
+        // Une commande annulee n'ouvre jamais droit a la notation, meme si
+        // un paiement « paid » traine encore en base.
+        if ($order->status === 'cancelled') {
+            return ['eligible' => false, 'reason' => 'Cette commande a été annulée.'];
+        }
+
         // Transaction réelle : commande livrée ou paiement réussi.
         $isReal = $order->status === 'delivered'
             || $order->payments()->where('status', 'paid')->exists();

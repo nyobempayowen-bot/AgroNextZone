@@ -1,6 +1,9 @@
 @php
     $isLoggedIn = Auth::check();
-    $userRole = $isLoggedIn ? Auth::user()->role : null;
+    $user = $isLoggedIn ? Auth::user() : null;
+    $userRole = $user?->role;
+    $sidebarAvatarUrl = $user?->avatar_url; // null si aucune photo valide sur le disque
+    $sidebarInitials = $user?->initials ?? '';
 @endphp
 
 <!-- Sidebar Overlay -->
@@ -27,11 +30,15 @@
     @if($isLoggedIn)
         <div class="p-4 border-b border-slate-200">
             <div class="flex items-center gap-3">
-                <div class="h-10 w-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm">
-                    {{ substr(Auth::user()->name, 0, 1) }}
-                </div>
+                @if($sidebarAvatarUrl)
+                    <img id="sidebar-avatar-image" src="{{ $sidebarAvatarUrl }}" alt="Photo de profil de {{ $user->name }}" width="40" height="40" loading="lazy" decoding="async" class="h-10 w-10 rounded-full object-cover shrink-0 border-2 border-emerald-100 shadow-sm" onerror="window.AgroSidebarAvatarFallback && window.AgroSidebarAvatarFallback()" />
+                @endif
+                <div id="sidebar-avatar-fallback" @class([
+                    'h-10 w-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold shrink-0 border-2 border-emerald-100',
+                    'hidden' => (bool) $sidebarAvatarUrl,
+                ]) aria-hidden="{{ $sidebarAvatarUrl ? 'true' : 'false' }}">{{ $sidebarInitials }}</div>
                 <div class="flex-1 min-w-0">
-                    <div class="text-sm font-bold text-slate-900 truncate">{{ Auth::user()->name }}</div>
+                    <div class="text-sm font-bold text-slate-900 truncate">{{ $user->name }}</div>
                     <div class="text-[10px] text-emerald-600 font-semibold uppercase tracking-wider">
                         @if($userRole === 'producer') Producteur
                         @elseif($userRole === 'admin') Administrateur
@@ -195,6 +202,22 @@
 </aside>
 
 <script>
+    // Photo de profil indisponible côté navigateur (fichier supprimé, erreur 404)
+    // → repli automatique sur les initiales, sans casser la mise en page.
+    window.AgroSidebarAvatarFallback = function () {
+        const image = document.getElementById('sidebar-avatar-image');
+        const fallback = document.getElementById('sidebar-avatar-fallback');
+
+        if (image) {
+            image.classList.add('hidden');
+            image.removeAttribute('onerror');
+        }
+        if (fallback) {
+            fallback.classList.remove('hidden');
+            fallback.setAttribute('aria-hidden', 'false');
+        }
+    };
+
     function toggleSidebar() {
         const panel = document.getElementById('sidebar-panel');
 

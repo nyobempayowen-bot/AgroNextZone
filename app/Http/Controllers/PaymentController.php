@@ -6,6 +6,7 @@ use App\Models\Order;
 use App\Models\Payment;
 use App\Services\PaymentService;
 use App\Services\NotificationService;
+use App\Services\PostPurchaseReviewService;
 use App\Services\TransactionService;
 use Illuminate\Http\Request;
 
@@ -21,6 +22,7 @@ class PaymentController extends Controller
         private PaymentService $payments,
         private NotificationService $notifications,
         private TransactionService $transactions,
+        private PostPurchaseReviewService $postPurchaseReviews,
     ) {
     }
 
@@ -35,11 +37,19 @@ class PaymentController extends Controller
         // Crée (ou récupère) le paiement de la commande côté service.
         $payment = $this->payments->initiate($order);
 
+        // Invitation à noter : purement informative et NON bloquante.
+        // Calculée depuis MySQL uniquement, et seulement si le paiement est
+        // réellement « paid ». Sinon tableau vide : aucun avis proposé.
+        $invitation = $payment?->status === 'paid'
+            ? $this->postPurchaseReviews->invitationFor($order, $order->client)
+            : ['products' => collect(), 'producers' => collect(), 'total' => 0];
+
         return view('payment', [
             'order' => $order,
             'payment' => $payment,
             // Indique à la vue si le paiement est simulé (pas de vrai provider configuré).
             'simulation' => ! $this->payments->providerConfigured(),
+            'invitation' => $invitation,
         ]);
     }
 

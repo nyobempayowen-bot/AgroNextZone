@@ -14,7 +14,7 @@ class EnsureUserHasRole
     public function handle(Request $request, Closure $next, string ...$roles): Response
     {
         if (! $request->user()) {
-            abort(401);
+            return redirect()->route('login')->withErrors(['email' => 'Veuillez vous connecter pour accéder à cette page.']);
         }
 
         if (! in_array($request->user()->role, $roles, true)) {

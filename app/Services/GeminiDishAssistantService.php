@@ -4,10 +4,8 @@ namespace App\Services;
 
 use App\Models\LocalDish;
 use App\Models\LocalDishIngredient;
-use App\Models\Product;
 use App\Models\User;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -32,6 +30,7 @@ class GeminiDishAssistantService
 {
     public function __construct(
         private readonly OpenRouterService $ai,
+        private readonly CatalogSearchService $catalog,
     ) {
     }
 
@@ -61,12 +60,20 @@ class GeminiDishAssistantService
             return ['reply' => 'Posez-moi votre question : quel plat souhaitez-vous préparer ?', 'products' => [], 'known_dish' => false, 'api_error' => false];
         }
 
-        // (a) Recherche locale dans la base de connaissance.
+        // (a) Recherche locale dans la base de connaissance des plats.
         $matches = $this->findDishes($message);
 
-        // (b)+(c) Prompt + appel IA.
+        // (b) RECHERCHE CATALOGUE TEMPS RÉEL — AVANT d'appeler l'IA.
+        // C'est ce qui permet à l'assistant de répondre « j'ai vérifié »
+        // au lieu de « je n'ai pas accès aux stocks ». MySQL est la source
+        // de vérité commerciale ; l'IA ne fait que le reformuler.
+        $place = $this->catalog->resolvePlace($message);
+        $needles = $this->catalog->searchTermsFor($message);
+        $catalogue = $this->catalog->searchProducts($needles, $place);
+
+        // (c) Prompt + appel IA, enrichi par le catalogue réel.
         try {
-            $aiResult = $this->callOpenRouter($client, $message, $matches);
+            $aiResult = $this->callOpenRouter($client, $message, $matches, $catalogue);
 
             $reply = $aiResult['reply'];
             $ingredients = $aiResult['ingredients'];
@@ -76,15 +83,18 @@ class GeminiDishAssistantService
 
             return [
                 'reply' => "L'assistant est temporairement indisponible. Veuillez réessayer dans quelques instants.",
-                'products' => [],
+                'products' => $catalogue->values()->all(),
+                'catalogue' => $catalogue->values()->all(),
+                'catalogue_checked' => true,
                 'known_dish' => $matches->isNotEmpty(),
                 'api_error' => true,
             ];
         }
 
-        // (d) Vrais produits, triés par fiabilité producteur (réutilise le
-        //     même score que le service existant) puis prix.
-        $products = $this->findRealProducts($ingredients);
+        // (d) Vrais produits : d'abord ceux trouvés par la recherche directe
+        //     sur la question, puis ceux correspondant aux ingrédients de la
+        //     recette que l'IA a identifiés.
+        $products = $this->mergeProducts($catalogue, $this->findRealProducts($ingredients));
 
         // (f) Historique en session.
         $this->rememberTurn($client, $message, $reply);
@@ -92,6 +102,10 @@ class GeminiDishAssistantService
         return [
             'reply' => $reply,
             'products' => $products->values()->all(),
+            // Le catalogue réellement interrogé, transmis au front pour que
+            // l'utilisateur voie la source de ses informations.
+            'catalogue' => $catalogue->values()->all(),
+            'catalogue_checked' => true,
             'known_dish' => $knownDish,
             'api_error' => false,
         ];
@@ -132,7 +146,7 @@ class GeminiDishAssistantService
     }
 
     /** Appel IA réel via OpenRouter (même fournisseur que le service de recommandation). */
-    protected function callOpenRouter(User $client, string $message, Collection $matches): array
+    protected function callOpenRouter(User $client, string $message, Collection $matches, Collection $catalogue): array
     {
         if (! $this->ai->isConfigured()) {
             throw new \RuntimeException('OPENROUTER_API_KEY absente du fichier .env');
@@ -154,22 +168,49 @@ class GeminiDishAssistantService
             ->values()
             ->all();
 
+        $catalogueData = $catalogue->map(fn (array $p): array => [
+            'nom' => $p['name'],
+            'prix' => $p['price'],
+            'unite' => $p['unit'],
+            'stock' => $p['stock'],
+            'disponibilite' => $p['disponibilite'],
+            'producteur' => $p['producer'],
+            'localisation' => $p['location'],
+            'lien' => $p['url'],
+        ])->values()->all();
+
+        $catalogueJson = $catalogueData === []
+            ? 'AUCUN PRODUIT TROUVÉ dans le catalogue AgroNextZone pour cette demande.'
+            : $this->knowledgeJson($catalogueData);
+
         $prompt = <<<PROMPT
 Historique récent de la conversation (peut être vide):
 {$this->historyJson($history)}
 
 Message actuel du client: "{$message}"
 
-Base de connaissance des plats locaux (SEULE source de vérité autorisée, peut être vide):
+Base de connaissance des plats locaux (SEULE source de vérité autorisée pour la composition des plats, peut être vide):
 {$this->knowledgeJson($knowledge)}
+
+CATALOGUE AgroNextZone — REQUÊTE MYSQL RÉALISÉE À L'INSTANT (source de vérité COMMERCIALE) :
+{$catalogueJson}
 PROMPT;
 
-        $systemInstruction = "Tu es l'assistant repas d'une marketplace agricole camerounaise. "
-            ."Règles STRICTES : (1) La composition des plats provient UNIQUEMENT de la base de connaissance fournie ci-dessous. "
-            ."Si aucun plat de cette base ne correspond à la demande, dis honnêtement au client que tu ne connais pas encore ce plat "
-            ."et propose-lui de préciser lui-même ses ingrédients — n'invente JAMAIS la composition d'un plat. "
-            ."(2) Réponds en français, de façon conversationnelle et utile. "
-            ."(3) Réponds UNIQUEMENT avec du JSON valide, sans texte autour, au format exact : "
+        $systemInstruction = "Tu es l'assistant d'une marketplace agricole camerounaise, AgroNextZone. "
+            ."Règles STRICTES : "
+            ."(1) Le catalogue ci-dessus est le RÉSULTAT D'UNE RECHERCHE RÉELLE dans la base de données d'AgroNextZone, "
+            ."effectuée à l'instant. Tu AS accès aux produits, prix, stocks et producteurs de la plateforme. "
+            ."NE DIS JAMAIS « je n'ai pas accès aux stocks » ni « je ne peux pas vérifier la disponibilité » : "
+            ."si le catalogue est fourni ci-dessus, tu connais la disponibilité réelle. "
+            ."(2) Si le catalogue indique qu'aucun produit n'a été trouvé, dis-le honnêtement et propose des alternatives "
+            ."réellement listées — n'invente JAMAIS de produit, de prix, de stock, de producteur ou de localisation. "
+            ."(3) Distingue clairement ce qui est une connaissance générale (ex. « le Ndolé se prépare généralement avec… ») "
+            ."de ce qui est réellement disponible sur AgroNextZone (ex. « j'ai trouvé 3 produits disponibles »). "
+            ."Internet ou tes connaissances peuvent expliquer une recette, mais SEULE la base AgroNextZone "
+            ."détermine la disponibilité commerciale. "
+            ."(4) La composition des plats provient UNIQUEMENT de la base de connaissance des plats fournie. "
+            ."(5) Réponds en français, de façon conversationnelle, courte et utile. "
+            ."(6) Réponds UNIQUEMENT avec du JSON valide, sans texte autour, au format exact : "
             ."{\"reply\":\"<ta réponse conversationnelle>\",\"ingredients\":[\"<ingrédient 1>\",\"<ingrédient 2>\",...]} "
             ."où ingredients liste les ingrédients/catégories de produits à rechercher dans le catalogue.";
 
@@ -215,45 +256,51 @@ PROMPT;
             return collect();
         }
 
-        return Product::query()
-            ->select([
-                'products.id', 'products.name', 'products.slug', 'products.price', 'products.unit',
-                'users.name AS producer',
-                DB::raw('COALESCE(AVG(reviews.rating), 0) AS rating'),
-            ])
-            ->join('users', 'users.id', '=', 'products.producer_id')
-            ->leftJoin('reviews', 'reviews.product_id', '=', 'products.id')
-            ->leftJoin('categories', 'categories.id', '=', 'products.category_id')
-            ->where('products.is_available', true)
-            ->where('products.status', 'published')
-            ->where('products.stock_quantity', '>', 0)
-            ->where(function ($q) use ($ingredients) {
-                $q->whereIn('categories.name', $ingredients)
-                    ->orWhereIn('products.name', $ingredients)
-                    ->orWhere(function ($q2) use ($ingredients) {
-                        foreach ($ingredients as $ing) {
-                            $q2->orWhere('products.name', 'LIKE', '%'.$ing.'%');
-                            $q2->orWhere('categories.name', 'LIKE', '%'.$ing.'%');
-                        }
-                    });
-            })
-            ->groupBy('products.id', 'products.name', 'products.slug', 'products.price', 'products.unit', 'users.name')
-            ->orderByDesc('rating')
-            ->orderBy('products.price')
-            ->limit(12)
-            ->get()
-            ->map(fn ($p) => [
-                'id' => (int) $p->id,
-                'name' => $p->name,
-                'slug' => $p->slug,
-                'price' => (float) $p->price,
-                'unit' => $p->unit,
-                'producer' => $p->producer,
-                'score' => round(((float) $p->rating / 5) * 100), // 0-100
-            ]);
+        $needles = [];
+        foreach ($ingredients as $ing) {
+            $ing = trim((string) $ing);
+            if ($ing === '') {
+                continue;
+            }
+            $needles[] = mb_strtolower($ing);
+            foreach ($this->catalog->synonymsFor($ing) as $syn) {
+                $needles[] = mb_strtolower($syn);
+            }
+        }
+
+        // Même source de vérité que la recherche directe : MySQL via le service
+        // catalogue. Un produit sans stock ou non publié n'est jamais proposé.
+        return $this->catalog->searchProducts(array_values(array_unique($needles)), limit: 8);
     }
 
-    protected function rememberTurn(User $client, string $message, string $reply): void
+    /**
+ * Fusionne les produits trouvés par la recherche directe sur la question
+ * avec ceux trouvés via les ingrédients de la recette, sans doublon.
+ *
+ * La recherche directe passe en premier : elle répond à ce que le client a
+ * réellement demandé. Aucune fusion ne peut inventer un produit : les deux
+ * collections proviennent exclusivement de MySQL.
+ */
+protected function mergeProducts(Collection $direct, Collection $fromRecipe): Collection
+{
+    $merged = collect();
+    $seen = [];
+
+    foreach ($direct->concat($fromRecipe) as $product) {
+        $id = (int) ($product['id'] ?? 0);
+
+        if ($id === 0 || isset($seen[$id])) {
+            continue;
+        }
+
+        $seen[$id] = true;
+        $merged->push($product);
+    }
+
+    return $merged->take(12)->values();
+}
+
+protected function rememberTurn(User $client, string $message, string $reply): void
     {
         $key = "dish_assistant_{$client->id}";
         $history = session($key, []);

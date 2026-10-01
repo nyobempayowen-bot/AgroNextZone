@@ -25,9 +25,20 @@ use Illuminate\Validation\ValidationException;
  */
 class ReviewService
 {
-    public function assertPurchased(User $client, Product $product): Order
+    /**
+     * Commande ayant réellement fourni CE produit a CE client, ou null.
+     *
+     * Variante non bloquante de assertPurchased() : elle sert a lister les
+     * produits eligibles a la notation sans jamais lever d'exception. Elle
+     * s'appuie uniquement sur des lignes MySQL (orders + order_items +
+     * payments) : la session, le panier et la requete HTTP ne comptent pas.
+     *
+     * Le paiement refait systematiquement le controle : une commande annulee
+     * dont un paiement reste « paid » en base est explicitement exclue.
+     */
+    public function purchasedOrder(User $client, Product $product): ?Order
     {
-        $order = Order::query()
+        return Order::query()
             ->where('client_id', $client->id)
             ->whereHas('items', fn ($q) => $q->where('product_id', $product->id))
             ->where(function ($q) {
@@ -35,8 +46,14 @@ class ReviewService
                 $q->where('status', 'delivered')
                   ->orWhereHas('payments', fn ($p) => $p->where('status', 'paid'));
             })
+            ->where('status', '!=', 'cancelled')
             ->orderByDesc('id')
             ->first();
+    }
+
+    public function assertPurchased(User $client, Product $product): Order
+    {
+        $order = $this->purchasedOrder($client, $product);
 
         if (! $order) {
             throw ValidationException::withMessages([
@@ -45,6 +62,18 @@ class ReviewService
         }
 
         return $order;
+    }
+
+    /**
+     * Le client a-t-il deja note ce produit ? (regle existante : un avis par
+     * client et par produit).
+     */
+    public function hasAlreadyReviewed(User $client, Product $product): bool
+    {
+        return Review::query()
+            ->where('product_id', $product->id)
+            ->where('client_id', $client->id)
+            ->exists();
     }
 
     public function create(User $user, Product $product, array $data): Review
@@ -63,8 +92,7 @@ class ReviewService
             throw ValidationException::withMessages(['note' => 'La note doit être comprise entre 1 et 5.']);
         }
 
-        $existing = Review::query()->where('product_id', $product->id)->where('client_id', $user->id)->first();
-        if ($existing) {
+        if ($this->hasAlreadyReviewed($user, $product)) {
             throw ValidationException::withMessages(['avis' => 'Vous avez déjà évalué ce produit.']);
         }
 

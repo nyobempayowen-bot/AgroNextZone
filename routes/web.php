@@ -131,6 +131,9 @@ Route::get('/discussion/{id}', [MessagingController::class, 'show'])
     ->middleware('role:client,producer')->name('discussion');
 Route::post('/discussion/{id}', [MessagingController::class, 'send'])
     ->middleware('role:client,producer')->name('discussion.send');
+// Modification d'un message — IDOR-safe via MessagePolicy (sender_id === user.id).
+Route::patch('/message/{message}', [MessagingController::class, 'update'])
+    ->middleware('role:client,producer')->name('message.update');
 
 // Géolocalisation — le navigateur appelle ces routes, jamais Geoapify
 // directement : la clé API reste sur le serveur (GEOAPIFY_API_KEY dans .env).
